@@ -29,7 +29,8 @@ from agent.iteration_budget import IterationBudget
 from agent.memory_manager import StreamingContextScrubber
 from agent.session_activity import ActivityProvenance
 from agent.model_metadata import (
-    MINIMUM_CONTEXT_LENGTH, fetch_model_metadata, is_local_endpoint, query_ollama_num_ctx
+    MINIMUM_CONTEXT_LENGTH, fetch_model_metadata, is_local_endpoint, query_ollama_num_ctx,
+    resolve_minimum_context_length,
 )
 from agent.process_bootstrap import _install_safe_stdio
 from agent.subdirectory_hints import SubdirectoryHintTracker
@@ -1686,6 +1687,9 @@ def _resolve_context_length(agent, _agent_cfg, base_url):
             )
     agent._session_init_model_config["max_tokens"] = agent.max_tokens
 
+    _min_floor_raw = _model_section.get("min_context_length", _model_section.get("minimum_context_length"))
+    agent._min_context_length = resolve_minimum_context_length(_min_floor_raw)
+
     _config_context_length = _model_section.get("context_length")
     if _config_context_length is not None:
         try:
@@ -1852,6 +1856,7 @@ def _build_context_engine(agent, _agent_cfg, cs, _custom_providers, _effective_c
             proactive_prune_min_result_chars=cs.proactive_prune_min_chars,
             proactive_prune_min_reclaim_tokens=cs.proactive_prune_min_reclaim,
             min_tail_user_messages=cs.min_tail_users, tail_mode=cs.tail_mode,
+            minimum_context_length=getattr(agent, "_min_context_length", MINIMUM_CONTEXT_LENGTH),
         )
     _bind_session_state = getattr(agent.context_compressor, "bind_session_state", None)
     if callable(_bind_session_state):
@@ -1890,8 +1895,12 @@ def _build_context_engine(agent, _agent_cfg, cs, _custom_providers, _effective_c
 
 
 def _enforce_minimum_context(agent):
-    # Reject windows below the 64K floor needed for reliable tool-calling; an explicit
-    # positive model.context_length on LM Studio is allowed below the floor.
+    # Reject windows below the configured floor (default 64K) needed for reliable
+    # tool-calling; an explicit positive model.context_length on LM Studio is allowed
+    # below the default floor for back-compat. A custom model.min_context_length
+    # lowers the floor for any provider (8K single-purpose agents).
+    from agent.model_metadata import minimum_context_length_for
+    _floor = minimum_context_length_for(agent)
     _ctx = getattr(agent.context_compressor, "context_length", 0)
     _allow_lmstudio_explicit_below_floor = (
         str(agent.provider or "").strip().lower() == "lmstudio"
@@ -1899,15 +1908,17 @@ def _enforce_minimum_context(agent):
         and not isinstance(agent._config_context_length, bool)
         and agent._config_context_length > 0
     )
-    if _ctx and _ctx < MINIMUM_CONTEXT_LENGTH and not _allow_lmstudio_explicit_below_floor:
+    if _ctx and _ctx < _floor and not _allow_lmstudio_explicit_below_floor:
         raise ValueError(
             f"Model {agent.model} has a context window of {_ctx:,} tokens, "
-            f"which is below the minimum {MINIMUM_CONTEXT_LENGTH:,} required "
+            f"which is below the minimum {_floor:,} required "
             f"by Hermes Agent.  Choose a model with at least "
-            f"{MINIMUM_CONTEXT_LENGTH // 1000}K context.  If your server "
+            f"{_floor // 1000}K context.  If your server "
             f"reports a window smaller than the model's true window, set "
             f"model.context_length in config.yaml to the real value "
-            f"(this must be at least {MINIMUM_CONTEXT_LENGTH // 1000}K)."
+            f"(this must be at least {_floor // 1000}K). "
+            f"For small single-purpose agents, set model.min_context_length "
+            f"to lower the floor."
         )
 
 

@@ -314,6 +314,42 @@ def _warn_context_length_fallback(model: str, base_url: str) -> None:
 
 # Sessions, model switches and cron jobs reject models below this (too little working memory).
 MINIMUM_CONTEXT_LENGTH = 64_000
+
+
+def resolve_minimum_context_length(value: Any = None) -> int:
+    """Effective minimum context window: explicit ``model.min_context_length`` wins, else the default.
+
+    Accepts ints and numeric strings; bools, non-numeric, and non-positive values fall back
+    to ``MINIMUM_CONTEXT_LENGTH`` so a mis-typed config never disables the guard entirely.
+    """
+    if isinstance(value, bool):
+        return MINIMUM_CONTEXT_LENGTH
+    try:
+        ivalue = int(str(value).strip().replace(",", "") if isinstance(value, str) else value)
+    except (TypeError, ValueError, AttributeError):
+        return MINIMUM_CONTEXT_LENGTH
+    return ivalue if ivalue > 0 else MINIMUM_CONTEXT_LENGTH
+
+
+def minimum_context_length_for(agent: Any = None, explicit: Any = None) -> int:
+    """Floor for ``agent``: explicit arg > ``agent._min_context_length`` > default."""
+    if explicit is not None:
+        return resolve_minimum_context_length(explicit)
+    if agent is not None:
+        try:
+            stored = getattr(agent, "_min_context_length", None)
+        except Exception:
+            stored = None
+        if stored is not None:
+            return resolve_minimum_context_length(stored)
+        try:
+            compressor = getattr(agent, "context_compressor", None)
+            stored = getattr(compressor, "_minimum_context_length", None)
+        except Exception:
+            stored = None
+        if stored is not None:
+            return resolve_minimum_context_length(stored)
+    return MINIMUM_CONTEXT_LENGTH
 # In-process (model, base_url) -> (result, monotonic_ts) memo for local probes: one
 # startup resolves the same model several times (banner, /model, compressor). Never persisted.
 _LOCAL_CTX_PROBE_TTL_SECONDS = 30.0

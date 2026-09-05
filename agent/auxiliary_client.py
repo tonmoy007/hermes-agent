@@ -107,7 +107,7 @@ def aux_probe_mode():
 
 from agent.credential_pool import load_pool
 from agent.model_metadata import (
-    MINIMUM_CONTEXT_LENGTH, get_model_context_length,
+    MINIMUM_CONTEXT_LENGTH, get_model_context_length, resolve_minimum_context_length,
     strip_codex_context_variant_suffix as _strip_codex_ctx_variant,
 )
 from hermes_cli.config import get_hermes_home
@@ -3849,9 +3849,36 @@ def _try_main_agent_model_fallback(
 # ``get_model_context_length`` are passed through (we cannot prove a model is too small, so we do not block
 # it). This preserves the existing fallback surface for unrecognised/custom models while closing the gap on
 # the well-known ones.
-def _task_minimum_context_length(task: Optional[str]) -> Optional[int]:
+def _configured_minimum_context_length() -> int | None:
+    """Explicit ``model.min_context_length`` from readonly config, or None when unset/invalid."""
+    try:
+        from hermes_cli.config import load_config_readonly
+        cfg = load_config_readonly()
+        model_cfg = cfg.get("model", {}) if isinstance(cfg, dict) else {}
+        if isinstance(model_cfg, dict):
+            raw = model_cfg.get("min_context_length", model_cfg.get("minimum_context_length"))
+            if raw is not None and not isinstance(raw, bool):
+                ivalue = int(str(raw).strip().replace(",", "") if isinstance(raw, str) else raw)
+                if ivalue > 0:
+                    return ivalue
+    except Exception:
+        pass
+    return None
+
+
+def _task_minimum_context_length(task: Optional[str], minimum_override: Optional[int] = None) -> Optional[int]:
     """Minimum context length for an auxiliary task; None = no floor (only ``compression`` has one)."""
-    return MINIMUM_CONTEXT_LENGTH if task == "compression" else None
+    if task != "compression":
+        return None
+    if minimum_override is not None and not isinstance(minimum_override, bool):
+        try:
+            ivalue = int(minimum_override)
+        except (TypeError, ValueError):
+            ivalue = 0
+        if ivalue > 0:
+            return ivalue
+    configured = _configured_minimum_context_length()
+    return configured if configured is not None else MINIMUM_CONTEXT_LENGTH
 
 
 def _candidate_context_window(provider: str, model: str, base_url: str = "", api_key: str = "") -> Optional[int]:

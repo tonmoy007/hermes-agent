@@ -1722,6 +1722,7 @@ def _lower_threshold_to_aux_context(
         recomputed_threshold = _CC._compute_threshold_tokens(
             main_ctx, _CC._effective_threshold_percent(main_ctx, safe_pct / 100),
             getattr(compressor, "max_tokens", None),
+            getattr(compressor, "_minimum_context_length", None),
         )
     threshold_suggestion_viable = recomputed_threshold is None or recomputed_threshold <= aux_context
     # "model (provider)" labels for both sides; empty/"auto" provider falls back to the client's base_url hostname.
@@ -1775,7 +1776,7 @@ def check_compression_model_feasibility(agent: Any) -> None:
             _resolve_task_provider_model, _try_configured_fallback_for_unavailable_client,
             get_text_auxiliary_client,
         )
-        from agent.model_metadata import MINIMUM_CONTEXT_LENGTH, get_model_context_length
+        from agent.model_metadata import minimum_context_length_for, get_model_context_length
         # Provider may be "auto"; fall back to the client's base_url hostname so the
         # user can tell where the compression model is actually called.
         try:
@@ -1823,14 +1824,15 @@ def check_compression_model_feasibility(agent: Any) -> None:
             config_context_length=getattr(agent, "_aux_compression_context_length_config", None),
             provider=_aux_provider, custom_providers=agent._custom_providers,
         )
-        # Aux model must meet MINIMUM_CONTEXT_LENGTH like the main model, else it cannot summarise a full window.
-        if aux_context and aux_context < MINIMUM_CONTEXT_LENGTH:
+        # Aux model must meet the configured floor like the main model, else it cannot summarise a full window.
+        _floor = minimum_context_length_for(agent)
+        if aux_context and aux_context < _floor:
             raise ValueError(
                 f"Auxiliary compression model {aux_model} has a context "
                 f"window of {aux_context:,} tokens, which is below the "
-                f"minimum {MINIMUM_CONTEXT_LENGTH:,} required by Hermes "
+                f"minimum {_floor:,} required by Hermes "
                 f"Agent.  Choose a compression model with at least "
-                f"{MINIMUM_CONTEXT_LENGTH // 1000}K context (set "
+                f"{_floor // 1000}K context (set "
                 f"auxiliary.compression.model in config.yaml), or set "
                 f"auxiliary.compression.context_length to override the "
                 f"detected value if it is wrong."
